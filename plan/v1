@@ -1,0 +1,134 @@
+### Project Checklist: AI-Powered QA Copilot (Cirkitly Style) - v1
+
+**Project Goal:** Develop a Pocket Flow-based RAG QA system capable of answering questions from a knowledge base, with robust, production-ready test suites that ensure code quality and functionality.
+
+---
+
+#### Phase 1: Project Setup & Initial Understanding
+
+* **1.1 Environment Setup**
+    * [ ] Verify `requirements.txt` includes `pocketflow`, `openai`, `pytest`, `scikit-learn` (for dummy retrieval) or a chosen vector DB library (e.g., `chromadb`).
+    * [ ] Install all dependencies: `pip install -r requirements.txt`.
+    * [ ] Set `OPENAI_API_KEY` environment variable.
+* **1.2 Initial Code Review**
+    * [ ] Understand the existing `nodes.py` (GetQuestionNode, AnswerNode).
+    * [ ] Understand `flow.py` and `main.py` structure.
+    * [ ] Understand `utils/call_llm.py` and its interaction with OpenAI.
+* **1.3 Run Current Example**
+    * [ ] Execute `python main.py` to observe the basic QA flow.
+
+---
+
+#### Phase 2: Detailed Design & Specification (Your "Specs" for Testing)
+
+* **2.1 Refine `docs/design.md`**
+    * [ ] **Requirements**: Detail concrete user stories for the RAG QA system (e.g., "As a user, I want to ask questions about uploaded documents and receive factual answers from those documents.").
+    * [ ] **Flow Design**: Clearly describe the 4-node RAG flow: `GetQuestionNode -> EmbeddingNode -> RetrievalNode -> AnswerNode`.
+    * [ ] Update the Mermaid diagram to reflect the 4-node RAG flow.
+    * [ ] **Utility Functions**: Confirm `call_llm` and `get_embedding` are listed with correct inputs/outputs/dimensions.
+    * [ ] **Shared Store**: Explicitly define all keys and their expected data types/contents in the `shared` dictionary (e.g., `question`, `question_embedding`, `retrieved_context`, `answer`).
+    * [ ] **Node Steps**: For each of the four nodes, clearly define:
+        * Purpose
+        * Type (Regular, Batch, Async)
+        * `prep` steps (inputs from `shared`)
+        * `exec` steps (logic, utility calls)
+        * `post` steps (outputs to `shared`)
+    * [ ] **Error Handling Scenarios**: Document expected behavior for common errors (e.g., LLM API failure, no relevant context found, empty input). This forms a "negative testing" spec.
+
+---
+
+#### Phase 3: Core Feature Development (RAG Implementation)
+
+* **3.1 Implement `utils/get_embedding.py`**
+    * [ ] Create `get_embedding` function using OpenAI's embedding API.
+    * [ ] Add `try-except` for API errors and return a fallback (e.g., zero vector or raise custom error).
+* **3.2 Implement `nodes.py` updates**
+    * [ ] **Modify `GetQuestionNode`**: Ensure it takes input and stores it correctly.
+    * [ ] **Add `EmbeddingNode`**:
+        * [ ] `prep`: Reads `question`.
+        * [ ] `exec`: Calls `get_embedding`.
+        * [ ] `post`: Stores `question_embedding`.
+    * [ ] **Add `RetrievalNode`**:
+        * [ ] `prep`: Reads `question_embedding`.
+        * [ ] `exec`: **Implement a placeholder retrieval logic (e.g., simple keyword match or a static lookup from a dummy knowledge base).** *This will be replaced later with actual vector search.*
+        * [ ] `post`: Stores `retrieved_context`.
+    * [ ] **Modify `AnswerNode`**:
+        * [ ] `prep`: Reads `question` and `retrieved_context`.
+        * [ ] `exec`: Constructs a clear prompt for the LLM using both question and context; calls `call_llm`.
+        * [ ] `post`: Stores `answer`.
+* **3.3 Update `flow.py`**
+    * [ ] Import `EmbeddingNode` and `RetrievalNode`.
+    * [ ] Connect the nodes in the correct RAG sequence: `GetQuestionNode >> EmbeddingNode >> RetrievalNode >> AnswerNode`.
+* **3.4 Update `main.py`**
+    * [ ] Adjust initial `shared` dictionary to align with the new flow.
+    * [ ] Remove any hardcoded questions that bypass `GetQuestionNode` if present.
+    * [ ] Print `question`, `retrieved_context`, and `answer` for debugging.
+
+---
+
+#### Phase 4: Test Suite Development (Production-Ready)
+
+* **4.1 Test File Structure**
+    * [ ] Create `tests/` directory.
+    * [ ] Create `tests/test_nodes.py`, `tests/test_utils.py`, `tests/test_flow.py`.
+* **4.2 Generate Unit Tests (`tests/test_utils.py`)**
+    * [ ] Test `call_llm`:
+        * [ ] Mock OpenAI API to simulate successful responses.
+        * [ ] Test for expected output format.
+        * [ ] Test for error handling (e.g., API key invalid, network issues, rate limits).
+    * [ ] Test `get_embedding`:
+        * [ ] Mock OpenAI API to simulate successful responses.
+        * [ ] Test for correct vector dimension output.
+        * [ ] Test for error handling.
+* **4.3 Generate Unit Tests (`tests/test_nodes.py`)**
+    * [ ] For each Node (`GetQuestionNode`, `EmbeddingNode`, `RetrievalNode`, `AnswerNode`):
+        * [ ] **Test `prep`**: Verify it correctly reads from the `shared` dictionary.
+        * [ ] **Test `exec`**: Mock any external dependencies (LLM calls, embedding calls, retrieval database) to isolate node logic. Verify correct processing and return value.
+        * [ ] **Test `post`**: Verify it correctly writes to the `shared` dictionary.
+        * [ ] **Edge Cases**: Test with empty inputs, unexpected data in `shared` (if applicable).
+* **4.4 Generate Integration Tests (`tests/test_flow.py`)**
+    * [ ] Test `create_qa_flow`: Verify the structure of the flow (correct nodes and connections).
+    * [ ] Test end-to-end flow with a typical question: Verify `shared` contains expected `question`, `question_embedding` (mocked), `retrieved_context` (mocked), and `answer` (mocked LLM output).
+    * [ ] Test flow with edge cases:
+        * [ ] What happens if `get_embedding` fails?
+        * [ ] What happens if `RetrievalNode` finds no context?
+        * [ ] What happens if `call_llm` fails?
+* **4.5 Initial Test Run**
+    * [ ] Run `pytest` from the project root. Expect failures in `RetrievalNode` initially due to its dummy implementation.
+
+---
+
+#### Phase 5: Iterative Refinement & Quality Assurance
+
+* **5.1 Analyze Test Failures**
+    * [ ] Pinpoint exact lines and conditions causing failures.
+* **5.2 Refine Code Based on Failures**
+    * [ ] **Implement Real Retrieval Logic**:
+        * [ ] **Choose a simple vector store**: (e.g., in-memory `scikit-learn` or `Faiss` for vector similarity, with pre-embedded dummy documents).
+        * [ ] **Add a document loading/indexing mechanism**: A simple script or function to load text documents and embed them for the `RetrievalNode`.
+        * [ ] **Update `RetrievalNode.exec`**: Implement actual vector similarity search to retrieve top-k context chunks.
+    * [ ] **Improve Error Handling**: Add `try-except` blocks and clear error messages/fallback logic.
+    * [ ] **Input Validation**: Add checks for empty strings or malformed input where necessary.
+    * [ ] **Prompt Engineering**: Iterate on the prompt in `AnswerNode` to improve answer quality, specificity, and adherence to context.
+* **5.3 Continuous Testing**
+    * [ ] After *every* code change, re-run `pytest` and ensure all previous tests still pass.
+* **5.4 Performance (Optional, if specs require)**
+    * [ ] Measure flow execution time.
+    * [ ] Identify and optimize slow steps (e.g., batching embedding calls, optimizing retrieval).
+* **5.5 Compliance (if applicable to software)**
+    * [ ] Ensure LLM prompts and responses adhere to any ethical or safety guidelines (manual review for now).
+
+---
+
+#### Phase 6: Finalization & Documentation
+
+* **6.1 All Tests Pass**
+    * [ ] Confirm `pytest` runs cleanly with 100% passing tests.
+* **6.2 Final Code Review**
+    * [ ] Ensure code is clean, readable, and well-commented.
+    * [ ] Remove any debugging prints.
+* **6.3 Update Documentation**
+    * [ ] Update `docs/design.md` with final design decisions and implementation details.
+    * [ ] Update `README.md` to explain how to run the project and its capabilities.
+
+---
