@@ -59,7 +59,7 @@ pip install -r requirements.txt
 
 ---
 
-### 🏃‍♀️ How to Use It (The Fun Part!)
+### How to Use It (The Fun Part!)
 
 #### Step 1: Prepare Your C Project
 
