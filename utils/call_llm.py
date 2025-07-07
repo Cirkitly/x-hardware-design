@@ -19,6 +19,8 @@ if not logger.handlers:
     logger.addHandler(file_handler)
 cache_file = "llm_cache.json"
 
+# In cirkitly/utils/call_llm.py
+
 def call_llm(prompt: str, use_cache: bool = True) -> str:
     logger.info(f"PROMPT: {prompt}")
     cache = {}
@@ -33,24 +35,27 @@ def call_llm(prompt: str, use_cache: bool = True) -> str:
             return cache[prompt]
 
     model = os.getenv("LLM_MODEL", "llama3")
+    
     try:
+        # Step 1: Make the network request. This is the only part that
+        # should be in this try block.
         response = requests.post(
             "http://localhost:11434/api/generate",
             json={"model": model, "prompt": prompt, "stream": False}
         )
-        # --- START OF IMPROVED ERROR HANDLING ---
-        if response.status_code != 200:
-            try:
-                # Try to get the specific error from Ollama's response
-                error_msg = response.json().get("error", response.text)
-            except json.JSONDecodeError:
-                error_msg = response.text
-            raise requests.exceptions.HTTPError(f"Ollama API Error: {error_msg}")
-        # --- END OF IMPROVED ERROR HANDLING ---
-
     except requests.exceptions.RequestException as e:
+        # Step 2: Catch ONLY connection errors.
         logger.error(f"Failed to connect to Ollama server: {e}")
         raise Exception(f"Ollama connection error: {e}")
+
+    # Step 3: Handle API errors (bad status codes) separately.
+    if response.status_code != 200:
+        try:
+            error_msg = response.json().get("error", response.text)
+        except json.JSONDecodeError:
+            error_msg = response.text
+        # This will now be correctly caught by the test.
+        raise requests.exceptions.HTTPError(f"Ollama API Error: {error_msg}")
 
     try:
         response_text = response.json().get("response", "").strip()

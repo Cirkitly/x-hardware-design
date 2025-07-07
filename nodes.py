@@ -1,15 +1,35 @@
+import os
+import glob
 from pocketflow import Node
 from utils.call_llm import call_llm
 from utils.get_embedding import get_embedding
-from knowledge_base import KNOWLEDGE_DOCS
 from sklearn.metrics.pairwise import cosine_similarity
 import numpy as np
+
+# --- START OF NEW DOCUMENT LOADING LOGIC ---
+def load_knowledge_documents(path="knowledge_source"):
+    """Loads all .txt files from a given directory."""
+    docs = []
+    filepaths = glob.glob(os.path.join(path, "*.txt"))
+    print(f"Found {len(filepaths)} knowledge document(s)...")
+    for filepath in filepaths:
+        with open(filepath, 'r', encoding='utf-8') as f:
+            docs.append(f.read())
+    return docs
+
+# Load documents from the directory
+KNOWLEDGE_DOCS = load_knowledge_documents()
+# --- END OF NEW DOCUMENT LOADING LOGIC ---
 
 # This is a one-time setup to "index" our knowledge base.
 # In a real app, this would be done offline and stored in a vector DB.
 print("Pre-calculating embeddings for knowledge base...")
-KNOWLEDGE_EMBEDDINGS = np.array([get_embedding(doc) for doc in KNOWLEDGE_DOCS])
-print("...done.")
+if KNOWLEDGE_DOCS:
+    KNOWLEDGE_EMBEDDINGS = np.array([get_embedding(doc) for doc in KNOWLEDGE_DOCS])
+    print("...done.")
+else:
+    KNOWLEDGE_EMBEDDINGS = np.array([])
+    print("...knowledge base is empty.")
 
 
 class GetQuestionNode(Node):
@@ -39,6 +59,10 @@ class RetrievalNode(Node):
         return shared["question_embedding"]
     
     def exec(self, question_embedding):
+        # If there are no documents, return a helpful message.
+        if len(KNOWLEDGE_DOCS) == 0:
+            return "No documents found in the knowledge base."
+            
         # Find the most similar document from our knowledge base
         query_embedding = np.array(question_embedding).reshape(1, -1)
         similarities = cosine_similarity(query_embedding, KNOWLEDGE_EMBEDDINGS)

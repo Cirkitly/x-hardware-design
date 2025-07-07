@@ -5,16 +5,18 @@ import json
 
 logger = logging.getLogger("llm_logger")
 
+# In cirkitly/utils/get_embedding.py
+
 def get_embedding(text: str, model: str = None) -> list[float]:
     """
     Generates an embedding for the given text using the Ollama API.
     """
     if model is None:
         model = os.getenv("EMBEDDING_MODEL", "mxbai-embed-large")
-
+    
+    # --- START OF FIX ---
     try:
-        # --- START OF CHANGE ---
-        # Use the correct, dedicated endpoint for embedding models.
+        # Step 1: Make the network request.
         response = requests.post(
             "http://localhost:11434/api/embeddings",
             json={
@@ -22,29 +24,26 @@ def get_embedding(text: str, model: str = None) -> list[float]:
                 "prompt": text,
             }
         )
-        # --- END OF CHANGE ---
-        
-        if response.status_code != 200:
-            try:
-                error_msg = response.json().get("error", response.text)
-            except json.JSONDecodeError:
-                error_msg = response.text
-            raise requests.exceptions.HTTPError(f"Ollama API Error: {error_msg}")
-
-        # The response from /api/embeddings is just {"embedding": [...]}, so this works.
-        embedding = response.json().get("embedding")
-        if not embedding:
-            raise ValueError("API response did not contain an embedding.")
-            
-        logger.info(f"Successfully generated embedding for text: '{text[:50]}...'")
-        return embedding
-
     except requests.exceptions.RequestException as e:
+        # Step 2: Catch ONLY connection errors.
         logger.error(f"Failed to connect to Ollama for embedding: {e}")
         raise Exception(f"Ollama connection error for embedding: {e}")
-    except Exception as e:
-        logger.error(f"Failed to generate embedding: {e}")
-        raise
+    
+    # Step 3: Handle API errors (bad status codes) separately.
+    if response.status_code != 200:
+        try:
+            error_msg = response.json().get("error", response.text)
+        except json.JSONDecodeError:
+            error_msg = response.text
+        raise requests.exceptions.HTTPError(f"Ollama API Error: {error_msg}")
+    # --- END OF FIX ---
+
+    embedding = response.json().get("embedding")
+    if not embedding:
+        raise ValueError("API response did not contain an embedding.")
+        
+    logger.info(f"Successfully generated embedding for text: '{text[:50]}...'")
+    return embedding
 
 # (The __main__ block remains the same)
 if __name__ == "__main__":
