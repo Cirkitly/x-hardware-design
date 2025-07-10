@@ -1,4 +1,4 @@
-#include "spi.h" // Use the new header
+#include "../include/spi.h" // Use the new header
 
 /**
  * @brief Writes a block of data to the SPI bus.

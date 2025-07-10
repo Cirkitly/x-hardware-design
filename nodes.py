@@ -9,25 +9,46 @@ class ProjectParserNode(Node):
         repo_path = input("Enter the path to the repository: ")
         if not os.path.isdir(repo_path):
             raise NotADirectoryError(f"Path is not a valid directory: {repo_path}")
-
-        # --- START OF FIX ---
-        # Store the repo_path on the node instance so we can access it in the post() method.
         self.repo_path = repo_path
-        # --- END OF FIX ---
+
+        # --- START OF IMPROVEMENT ---
+        # Define directories and file patterns to exclude from the test candidate list.
+        excluded_dirs = ['/unity/', '/tests/']
+        
+        # Get all C files recursively.
+        all_c_files = glob.glob(os.path.join(repo_path, '**/*.c'), recursive=True)
+
+        # Filter the list to get only relevant application source files.
+        source_files = []
+        for f in all_c_files:
+            # Normalize path separators for consistent matching
+            normalized_path = f.replace('\\', '/')
+            
+            # 1. Exclude files that are already tests.
+            if os.path.basename(normalized_path).startswith('test_'):
+                continue
+            
+            # 2. Exclude files from specified directories.
+            if any(excluded in normalized_path for excluded in excluded_dirs):
+                continue
+                
+            source_files.append(f)
+        # --- END OF IMPROVEMENT ---
 
         project_structure = {"sources": {}, "headers": {}}
         
-        c_files = glob.glob(os.path.join(repo_path, '**/*.c'), recursive=True)
+        # Use the filtered list of source files.
+        c_files = source_files
         h_files = glob.glob(os.path.join(repo_path, '**/*.h'), recursive=True)
 
         for h_path in h_files:
             key = os.path.basename(h_path)
-            with open(h_path, 'r') as f:
+            with open(h_path, 'r', encoding='utf-8') as f:
                 project_structure["headers"][key] = {"path": h_path, "content": f.read()}
 
         for c_path in c_files:
             key = os.path.basename(c_path)
-            with open(c_path, 'r') as f:
+            with open(c_path, 'r', encoding='utf-8') as f:
                 content = f.read()
                 dependencies = [h for h in project_structure["headers"] if f'#include "{h}"' in content]
                 project_structure["sources"][key] = {"path": c_path, "content": content, "dependencies": dependencies}
@@ -36,23 +57,29 @@ class ProjectParserNode(Node):
 
     def post(self, shared, prep_res, exec_res):
         shared["project_structure"] = exec_res
-        # --- START OF FIX ---
-        # Now, save the repo_path to the shared dictionary for later nodes.
         shared["repo_path"] = self.repo_path
-        # --- END OF FIX ---
 
+
+# --- All other nodes remain the same ---
 
 class TestCandidateSelectionNode(Node):
     def prep(self, shared):
         return shared["project_structure"]
 
     def exec(self, project_structure):
-        """Asks the user to select which file to test."""
-        print("\nFound the following testable source files:")
+        print("\nFound the following source files:") # Changed message for clarity
         sources = list(project_structure["sources"].keys())
+        
+        # Add a check for no found files
+        if not sources:
+            print("No testable source files found after filtering.")
+            print("Please check your project structure and exclusion rules in nodes.py.")
+            # We can gracefully exit or raise an error.
+            # For now, let's raise an error to stop the flow.
+            raise FileNotFoundError("No valid source files found to test.")
+
         for i, src in enumerate(sources):
             print(f"  [{i+1}] {src}")
-
         while True:
             try:
                 choice = int(input("Which file would you like to generate tests for? "))
@@ -75,9 +102,8 @@ class ContextualTestGeneratorNode(Node):
         }
 
     def exec(self, inputs):
-        """Generates tests using the code AND its dependency headers as context."""
+        print("Generating initial draft of tests...")
         target_code = inputs["target"]["content"]
-        
         header_context = ""
         for dep_header_name in inputs["target"]["dependencies"]:
             header_context += f"// Content of header: {dep_header_name}\n"
@@ -100,14 +126,76 @@ class ContextualTestGeneratorNode(Node):
         ```
 
         Guidelines:
-        1.  Generate a complete, compilable C file.
-        2.  Include necessary headers (`unity.h`, and the header for the code under test).
+        1.  Generate a complete, compilable C file that will not produce any compiler warnings.
+        2.  Include necessary headers (`unity.h`, `<stdlib.h>` if using malloc/free, and the header for the code under test).
         3.  Create tests for success paths and all edge cases (NULL pointers, invalid values, etc.).
-        4.  Include `setUp()`, `tearDown()`, and a `main()` function to run the tests.
+        4.  Include `setUp()`, `tearDown()`, and a `main()` function.
+        5.  The `main()` function MUST use the standard Unity test runner format: `UNITY_BEGIN()`, followed by `RUN_TEST()` for each test function, and finally `return UNITY_END();`.
+            **Do not use the Unity Fixture style (`UnityMain`).**
 
-        Generate the unit test file now.
+        Generate the complete unit test file now.
         """
         return call_llm(prompt)
+
+    def post(self, shared, prep_res, exec_res):
+        shared["generated_tests"] = exec_res
+
+class TestRefinementNode(Node):
+    def prep(self, shared):
+        return {
+            "generated_code": shared["generated_tests"],
+            "original_code": shared["target_file"]["content"],
+        }
+
+    def exec(self, inputs):
+        current_code = inputs["generated_code"]
+        max_retries = 3
+
+        for i in range(max_retries):
+            print(f"Self-correction pass {i + 1}/{max_retries}...")
+            
+            review_prompt = f"""
+            You are a senior C developer and QA engineer performing a code review.
+            Your task is to analyze the following C unit test code and identify any potential issues.
+            Treat compiler warnings (like 'implicit declaration of function') as errors that must be fixed.
+
+            The original source code being tested is:
+            ```c
+            {inputs['original_code']}
+            ```
+
+            Here is the generated unit test to review:
+            ```c
+            {current_code}
+            ```
+
+            Analyze the unit test for the following issues:
+            1.  **Compilation Errors & Warnings:** Will this code compile cleanly? Check for missing headers (e.g., `<stdlib.h>` for `malloc`), typos, or incorrect use of constants.
+            2.  **Correct `main` function:** The `main` function MUST use the standard Unity test runner format: `UNITY_BEGIN()`, followed by `RUN_TEST()` for each test function, and finally `return UNITY_END();`. Using the `UnityMain` style is an error.
+            3.  **Logic Errors:** Does the test correctly verify the intended behavior? Are the assertions correct?
+            4.  **Missing Coverage:** Does the test cover all important edge cases mentioned in the original code's comments or logic?
+
+            **Instructions:**
+            -   If you find any errors or warnings, provide a corrected, complete, and final version of the code inside a single C markdown block. Do not provide explanations outside the code block.
+            -   If the code is already perfect and has no errors or warnings, respond with ONLY the phrase "The code is correct." and nothing else.
+            """
+
+            review_response = call_llm(review_prompt)
+
+            if "The code is correct." in review_response:
+                print("Code review passed. No more refinement needed.")
+                break
+            
+            print("Found issues, applying corrections...")
+            if "```c" in review_response:
+                parts = review_response.split("```c")
+                if len(parts) > 1:
+                    current_code = parts[1].split("```")[0].strip()
+            else:
+                current_code = review_response.strip()
+
+        print("Refinement complete.")
+        return current_code
 
     def post(self, shared, prep_res, exec_res):
         shared["generated_tests"] = exec_res
@@ -126,12 +214,10 @@ class FileWriterNode(Node):
         }
     
     def exec(self, inputs):
-        """Writes the generated tests to a file."""
         filename = inputs["filename"]
         content = inputs["content"]
         
         if "```c" in content:
-            # A more robust way to extract code from markdown blocks
             parts = content.split("```c")
             if len(parts) > 1:
                 content = parts[1].split("```")[0]
@@ -148,14 +234,15 @@ class FileWriterNode(Node):
 
 class MakefileGeneratorNode(Node):
     def prep(self, shared):
+        test_file_path = shared["output_status"].split("Tests written to ", 1)[1]
+        
         return {
             "repo_path": shared["repo_path"],
             "target_source_path": shared["target_file"]["path"],
-            "test_file_path": shared["output_status"].split("Tests written to ")[1]
+            "test_file_path": test_file_path
         }
     
     def exec(self, inputs):
-        """Generates a simple Makefile to compile and run the test."""
         repo_path = inputs["repo_path"]
         target_src = os.path.relpath(inputs["target_source_path"], repo_path)
         test_src = os.path.relpath(inputs["test_file_path"], repo_path)
@@ -165,6 +252,7 @@ class MakefileGeneratorNode(Node):
 # Assumes Unity is in a ./unity/ directory relative to this Makefile
 
 CC = gcc
+CFLAGS = -std=c99 -Wall -Wextra -pedantic
 UNITY_PATH = ./unity
 UNITY_SRC = $(UNITY_PATH)/src/unity.c
 INC_DIRS = -I. -I$(UNITY_PATH)/src -I./include
@@ -175,7 +263,7 @@ TARGET = test_runner
 all: $(TARGET)
 
 $(TARGET): $(SRC_FILES)
-	$(CC) -o $(TARGET) $(SRC_FILES) $(INC_DIRS)
+	$(CC) $(CFLAGS) $(INC_DIRS) -o $(TARGET) $(SRC_FILES)
 
 run: $(TARGET)
 	./$(TARGET)
