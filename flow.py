@@ -1,10 +1,10 @@
 from pocketflow import Flow
 from nodes import (
     ProjectParserNode, 
-    TestCandidateSelectionNode, 
+    CandidateSelectionNode,      # Renamed
     RequirementExtractionNode,
-    TestPlanGeneratorNode,       # New
-    HumanApprovalNode,           # New
+    PlanGeneratorNode,           # Renamed
+    HumanApprovalNode,
     ContextualTestGeneratorNode, 
     FinalReviewerNode,
     FileWriterNode,
@@ -13,9 +13,9 @@ from nodes import (
 
 def create_repo_testgen_flow():
     parser_node = ProjectParserNode()
-    selector_node = TestCandidateSelectionNode()
+    selector_node = CandidateSelectionNode()         # Renamed
     extractor_node = RequirementExtractionNode()
-    plan_generator_node = TestPlanGeneratorNode()
+    plan_generator_node = PlanGeneratorNode()        # Renamed
     human_approval_node = HumanApprovalNode()
     generator_node = ContextualTestGeneratorNode()
     reviewer_node = FinalReviewerNode()

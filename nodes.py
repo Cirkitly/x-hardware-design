@@ -1,6 +1,3 @@
-# File: cirkitly/nodes.py
-# This is the complete, corrected, and final version of the file.
-
 import os
 import glob
 from pocketflow import Node
@@ -10,10 +7,7 @@ from sklearn.metrics.pairwise import cosine_similarity
 import numpy as np
 from tui import console, print_step, prompt_for_input, prompt_for_choice, status, prompt_for_confirmation, print_plan
 
-def print_code(code):
-    """Prints code in a formatted way to the console."""
-    console.print(f"[code]\n{code}\n[/code]")
-
+# ... (ProjectParserNode is unchanged) ...
 class ProjectParserNode(Node):
     def exec(self, _):
         """Scans a repo for source files and the project for spec files."""
@@ -64,7 +58,9 @@ class ProjectParserNode(Node):
         shared["project_structure"] = exec_res
         shared["repo_path"] = self.repo_path
 
-class TestCandidateSelectionNode(Node):
+
+# --- RENAMED: from TestCandidateSelectionNode ---
+class CandidateSelectionNode(Node):
     def prep(self, shared):
         return shared["project_structure"]
 
@@ -87,6 +83,7 @@ class TestCandidateSelectionNode(Node):
     def post(self, shared, prep_res, exec_res):
         shared["target_file"] = exec_res
 
+# ... (RequirementExtractionNode is unchanged) ...
 class RequirementExtractionNode(Node):
     def prep(self, shared):
         return {
@@ -122,7 +119,8 @@ class RequirementExtractionNode(Node):
     def post(self, shared, prep_res, exec_res):
         shared["relevant_requirements"] = exec_res
 
-class TestPlanGeneratorNode(Node):
+# --- RENAMED: from TestPlanGeneratorNode ---
+class PlanGeneratorNode(Node):
     def prep(self, shared):
         return {
             "target_content": shared["target_file"]["content"],
@@ -155,6 +153,7 @@ class TestPlanGeneratorNode(Node):
     def post(self, shared, prep_res, exec_res):
         shared["test_plan"] = exec_res
 
+# ... (The rest of the file: HumanApprovalNode, ContextualTestGeneratorNode, etc., are unchanged) ...
 class HumanApprovalNode(Node):
     def prep(self, shared):
         return shared["test_plan"]
