@@ -1,204 +1,209 @@
+# File: cirkitly/nodes.py
+# This is the complete, corrected, and final version of the file.
+
 import os
 import glob
 from pocketflow import Node
 from utils.call_llm import call_llm
+from utils.get_embedding import get_embedding
+from sklearn.metrics.pairwise import cosine_similarity
+import numpy as np
+from tui import console, print_step, prompt_for_input, prompt_for_choice, status
+
+def print_code(code):
+    """Prints code in a formatted way to the console."""
+    console.print(f"[code]\n{code}\n[/code]")
 
 class ProjectParserNode(Node):
     def exec(self, _):
-        """Scans a repo, identifies source/header files, and maps dependencies."""
-        repo_path = input("Enter the path to the repository: ")
+        """Scans a repo for source files and the project for spec files."""
+        repo_path = prompt_for_input("Enter the path to the C project", default="my_c_project")
         if not os.path.isdir(repo_path):
             raise NotADirectoryError(f"Path is not a valid directory: {repo_path}")
         self.repo_path = repo_path
 
-        # --- START OF IMPROVEMENT ---
-        # Define directories and file patterns to exclude from the test candidate list.
         excluded_dirs = ['/unity/', '/tests/']
-        
-        # Get all C files recursively.
         all_c_files = glob.glob(os.path.join(repo_path, '**/*.c'), recursive=True)
-
-        # Filter the list to get only relevant application source files.
         source_files = []
         for f in all_c_files:
-            # Normalize path separators for consistent matching
             normalized_path = f.replace('\\', '/')
-            
-            # 1. Exclude files that are already tests.
             if os.path.basename(normalized_path).startswith('test_'):
                 continue
-            
-            # 2. Exclude files from specified directories.
             if any(excluded in normalized_path for excluded in excluded_dirs):
                 continue
-                
             source_files.append(f)
-        # --- END OF IMPROVEMENT ---
-
-        project_structure = {"sources": {}, "headers": {}}
         
-        # Use the filtered list of source files.
+        project_structure = {"sources": {}, "headers": {}, "specs": {}}
         c_files = source_files
         h_files = glob.glob(os.path.join(repo_path, '**/*.h'), recursive=True)
+        
+        spec_dir = 'specs'
+        spec_files = []
+        if os.path.isdir(spec_dir):
+            spec_files = glob.glob(os.path.join(spec_dir, '**/*.md'), recursive=True)
+            spec_files += glob.glob(os.path.join(spec_dir, '**/*.txt'), recursive=True)
+        
+        for spec_path in spec_files:
+            key = os.path.basename(spec_path)
+            with open(spec_path, 'r', encoding='utf-8') as f:
+                project_structure["specs"][key] = {"path": spec_path, "content": f.read()}
 
         for h_path in h_files:
             key = os.path.basename(h_path)
             with open(h_path, 'r', encoding='utf-8') as f:
                 project_structure["headers"][key] = {"path": h_path, "content": f.read()}
-
         for c_path in c_files:
             key = os.path.basename(c_path)
             with open(c_path, 'r', encoding='utf-8') as f:
                 content = f.read()
                 dependencies = [h for h in project_structure["headers"] if f'#include "{h}"' in content]
                 project_structure["sources"][key] = {"path": c_path, "content": content, "dependencies": dependencies}
-
         return project_structure
 
     def post(self, shared, prep_res, exec_res):
         shared["project_structure"] = exec_res
         shared["repo_path"] = self.repo_path
 
-
-# --- All other nodes remain the same ---
-
 class TestCandidateSelectionNode(Node):
     def prep(self, shared):
         return shared["project_structure"]
 
     def exec(self, project_structure):
-        print("\nFound the following source files:") # Changed message for clarity
+        print_step("Found the following source files:")
         sources = list(project_structure["sources"].keys())
         
-        # Add a check for no found files
         if not sources:
-            print("No testable source files found after filtering.")
-            print("Please check your project structure and exclusion rules in nodes.py.")
-            # We can gracefully exit or raise an error.
-            # For now, let's raise an error to stop the flow.
+            console.print("[warning]No testable source files found after filtering.[/warning]")
             raise FileNotFoundError("No valid source files found to test.")
 
         for i, src in enumerate(sources):
-            print(f"  [{i+1}] {src}")
-        while True:
-            try:
-                choice = int(input("Which file would you like to generate tests for? "))
-                if 1 <= choice <= len(sources):
-                    selected_file = sources[choice-1]
-                    return project_structure["sources"][selected_file]
-                else:
-                    print("Invalid choice.")
-            except ValueError:
-                print("Please enter a number.")
+            console.print(f"  [prompt][{i+1}][/prompt] [path]{src}[/path]")
+        
+        choice = prompt_for_choice("Which file would you like to generate tests for?", sources)
+        
+        selected_file = sources[choice-1]
+        return project_structure["sources"][selected_file]
     
     def post(self, shared, prep_res, exec_res):
         shared["target_file"] = exec_res
 
+class RequirementExtractionNode(Node):
+    def prep(self, shared):
+        return {
+            "target_filename": os.path.basename(shared["target_file"]["path"]),
+            "specs": shared["project_structure"]["specs"]
+        }
+
+    def exec(self, inputs):
+        specs = inputs.get("specs", {})
+        if not specs:
+            print_step("No specification documents found in 'specs/' directory.")
+            return "No specific requirements found."
+
+        with status("Analyzing requirements..."):
+            target_filename = inputs["target_filename"]
+            query = f"What are the functional and error-handling requirements for the code in {target_filename}?"
+            query_embedding = get_embedding(query)
+            spec_contents = [doc["content"] for doc in specs.values()]
+            spec_embeddings = [get_embedding(doc) for doc in spec_contents]
+
+            if not spec_embeddings:
+                return "No specific requirements found."
+
+            similarities = cosine_similarity([query_embedding], spec_embeddings)[0]
+            most_relevant_idx = np.argmax(similarities)
+            
+            if similarities[most_relevant_idx] < 0.3:
+                return "No specific requirements found."
+            
+            print_step("Found relevant requirements.")
+            return spec_contents[most_relevant_idx]
+
+    def post(self, shared, prep_res, exec_res):
+        shared["relevant_requirements"] = exec_res
+
 class ContextualTestGeneratorNode(Node):
     def prep(self, shared):
-        return {
-            "target": shared["target_file"],
-            "headers": shared["project_structure"]["headers"]
-        }
-
+        return {"target": shared["target_file"], "headers": shared["project_structure"]["headers"], "requirements": shared.get("relevant_requirements", "No specific requirements provided.")}
+    
     def exec(self, inputs):
-        print("Generating initial draft of tests...")
-        target_code = inputs["target"]["content"]
-        header_context = ""
-        for dep_header_name in inputs["target"]["dependencies"]:
-            header_context += f"// Content of header: {dep_header_name}\n"
-            header_context += inputs["headers"][dep_header_name]["content"]
-            header_context += "\n\n"
-        
-        prompt = f"""
-        You are an expert in C unit testing for embedded systems, using the Unity test framework.
-        Your task is to generate a complete C unit test file for the provided source code.
+        with status("Generating initial draft of tests..."):
+            target_filename = os.path.basename(inputs["target"]["path"])
+            target_header = os.path.splitext(target_filename)[0] + ".h"
+            prompt = f"""
+            You are an expert C unit testing engineer. Generate a comprehensive test suite for the function(s) in `{target_filename}` based on the provided specification and source code.
 
-        You are given the source code to test AND the full content of its required header files for context.
-        Use this full context to create accurate tests.
+            ### Functional Requirements from Specification ###
+            {inputs["requirements"]}
 
-        ### Required Headers Context ###
-        {header_context}
-        
-        ### Source Code to Test ###
-        ```c
-        {target_code}
-        ```
-
-        Guidelines:
-        1.  Generate a complete, compilable C file that will not produce any compiler warnings.
-        2.  Include necessary headers (`unity.h`, `<stdlib.h>` if using malloc/free, and the header for the code under test).
-        3.  Create tests for success paths and all edge cases (NULL pointers, invalid values, etc.).
-        4.  Include `setUp()`, `tearDown()`, and a `main()` function.
-        5.  The `main()` function MUST use the standard Unity test runner format: `UNITY_BEGIN()`, followed by `RUN_TEST()` for each test function, and finally `return UNITY_END();`.
-            **Do not use the Unity Fixture style (`UnityMain`).**
-
-        Generate the complete unit test file now.
-        """
-        return call_llm(prompt)
-
-    def post(self, shared, prep_res, exec_res):
-        shared["generated_tests"] = exec_res
-
-class TestRefinementNode(Node):
-    def prep(self, shared):
-        return {
-            "generated_code": shared["generated_tests"],
-            "original_code": shared["target_file"]["content"],
-        }
-
-    def exec(self, inputs):
-        current_code = inputs["generated_code"]
-        max_retries = 3
-
-        for i in range(max_retries):
-            print(f"Self-correction pass {i + 1}/{max_retries}...")
+            ### Source Code to Test ###
+            ```c
+            {inputs["target"]["content"]}
+            ```
             
-            review_prompt = f"""
-            You are a senior C developer and QA engineer performing a code review.
-            Your task is to analyze the following C unit test code and identify any potential issues.
-            Treat compiler warnings (like 'implicit declaration of function') as errors that must be fixed.
-
-            The original source code being tested is:
-            ```c
-            {inputs['original_code']}
-            ```
-
-            Here is the generated unit test to review:
-            ```c
-            {current_code}
-            ```
-
-            Analyze the unit test for the following issues:
-            1.  **Compilation Errors & Warnings:** Will this code compile cleanly? Check for missing headers (e.g., `<stdlib.h>` for `malloc`), typos, or incorrect use of constants.
-            2.  **Correct `main` function:** The `main` function MUST use the standard Unity test runner format: `UNITY_BEGIN()`, followed by `RUN_TEST()` for each test function, and finally `return UNITY_END();`. Using the `UnityMain` style is an error.
-            3.  **Logic Errors:** Does the test correctly verify the intended behavior? Are the assertions correct?
-            4.  **Missing Coverage:** Does the test cover all important edge cases mentioned in the original code's comments or logic?
-
-            **Instructions:**
-            -   If you find any errors or warnings, provide a corrected, complete, and final version of the code inside a single C markdown block. Do not provide explanations outside the code block.
-            -   If the code is already perfect and has no errors or warnings, respond with ONLY the phrase "The code is correct." and nothing else.
+            **Task:** Write a complete C file containing Unity tests. The tests should be thorough and cover all requirements.
             """
-
-            review_response = call_llm(review_prompt)
-
-            if "The code is correct." in review_response:
-                print("Code review passed. No more refinement needed.")
-                break
-            
-            print("Found issues, applying corrections...")
-            if "```c" in review_response:
-                parts = review_response.split("```c")
-                if len(parts) > 1:
-                    current_code = parts[1].split("```")[0].strip()
-            else:
-                current_code = review_response.strip()
-
-        print("Refinement complete.")
-        return current_code
+            response = call_llm(prompt)
+        print_step("Initial draft generated.")
+        return response
 
     def post(self, shared, prep_res, exec_res):
         shared["generated_tests"] = exec_res
+
+class FinalReviewerNode(Node):
+    """A final pass to fix C syntax and structural errors."""
+    def prep(self, shared):
+        return {"generated_code": shared["generated_tests"]}
+
+    def exec(self, inputs):
+        with status("Performing final syntax and structural review..."):
+            review_prompt = f"""
+            You are a C language syntax checker and fixer. Your only job is to ensure the following code is valid, compilable C.
+
+            **Code to fix:**
+            ```c
+            {inputs['generated_code']}
+            ```
+
+            **Fix these common errors:**
+            1.  **Function Signatures:** Ensure all test function names are valid C identifiers. They must not contain spaces. Example: `void my test()` is WRONG. `void my_test()` is CORRECT.
+            2.  **Includes:** Ensure necessary headers like `unity.h`, `spi.h`, `<stdlib.h>` are included.
+            3.  **Mandatory Functions:** Ensure `setUp(void)` and `tearDown(void)` exist, even if empty.
+            4.  **RUN_TEST calls:** Ensure the arguments to `RUN_TEST()` are valid function names that exist in the file.
+
+            Return ONLY the complete, corrected C code in a single markdown block.
+            """
+            response = call_llm(review_prompt, use_cache=False)
+        print_step("Final review complete.")
+        return response
+
+    def post(self, shared, prep_res, exec_res):
+        shared["generated_tests"] = exec_res
+
+class HumanReviewNode(Node):
+    """Shows the final code to the user and asks for approval before writing."""
+    def prep(self, shared):
+        return shared["generated_tests"]
+
+    def exec(self, generated_code):
+        if "```c" in generated_code:
+            code_to_show = generated_code.split("```c")[1].split("```")[0].strip()
+        else:
+            code_to_show = generated_code.strip()
+
+        console.print()
+        print_code(code_to_show)
+        console.print()
+
+        if not prompt_for_confirmation("Save this generated test file?"):
+            print_step("Aborting. No files were written.")
+            self.flow_control.stop_flow = True # Stops the flow from proceeding
+        
+        return generated_code # Pass the code through
+    
+    def post(self, shared, prep_res, exec_res):
+        shared["generated_tests"] = exec_res
+
 
 class FileWriterNode(Node):
     def prep(self, shared):
@@ -208,10 +213,13 @@ class FileWriterNode(Node):
         base, ext = os.path.splitext(base_name)
         test_filename = os.path.join(dir_name, f"test_{base}.c")
         
-        return {
-            "filename": test_filename,
-            "content": shared["generated_tests"]
-        }
+        # Add overwrite guard
+        if os.path.exists(test_filename):
+            if not prompt_for_confirmation(f"[warning]File [path]{test_filename}[/path] already exists. Overwrite?[/warning]", default=False):
+                print_step("Aborting. No files were written.")
+                self.flow_control.stop_flow = True
+
+        return {"filename": test_filename, "content": shared["generated_tests"]}
     
     def exec(self, inputs):
         filename = inputs["filename"]
@@ -227,14 +235,14 @@ class FileWriterNode(Node):
         with open(filename, 'w', encoding='utf-8') as f:
             f.write(content)
             
-        return f"Tests written to {filename}"
+        return f"Tests written to [path]{filename}[/path]"
 
     def post(self, shared, prep_res, exec_res):
         shared["output_status"] = exec_res
 
 class MakefileGeneratorNode(Node):
     def prep(self, shared):
-        test_file_path = shared["output_status"].split("Tests written to ", 1)[1]
+        test_file_path = shared["output_status"].split("[path]")[1].split("[/path]")[0]
         
         return {
             "repo_path": shared["repo_path"],
@@ -252,30 +260,41 @@ class MakefileGeneratorNode(Node):
 # Assumes Unity is in a ./unity/ directory relative to this Makefile
 
 CC = gcc
-CFLAGS = -std=c99 -Wall -Wextra -pedantic
+# ADDED -DTEST to CFLAGS to expose test-only functions
+CFLAGS = -std=c99 -Wall -Wextra -pedantic -DTEST
+
 UNITY_PATH = ./unity
 UNITY_SRC = $(UNITY_PATH)/src/unity.c
+
+# Include paths for all necessary headers
 INC_DIRS = -I. -I$(UNITY_PATH)/src -I./include
 
+# All source files that need to be compiled
 SRC_FILES = {target_src} {test_src} $(UNITY_SRC)
+
+# The name of the final executable
 TARGET = test_runner
 
+# Default target
 all: $(TARGET)
 
+# Rule to build the test runner executable
 $(TARGET): $(SRC_FILES)
 	$(CC) $(CFLAGS) $(INC_DIRS) -o $(TARGET) $(SRC_FILES)
 
+# Rule to run the tests
 run: $(TARGET)
 	./$(TARGET)
 
+# Rule to clean up build artifacts
 clean:
 	rm -f $(TARGET)
 """
         makefile_path = os.path.join(repo_path, "Makefile.test")
         with open(makefile_path, 'w') as f:
             f.write(makefile_content.strip())
-
-        return f"Makefile generated at {makefile_path}"
+            
+        return f"Makefile generated at [path]{makefile_path}[/path]"
     
     def post(self, shared, prep_res, exec_res):
         shared["makefile_status"] = exec_res
