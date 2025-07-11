@@ -1,31 +1,32 @@
-# Cirkitly: Your AI-Powered C Test Generator
+# Cirkitly: Your AI-Powered C Test Copilot
 
-Welcome to Cirkitly! This is an AI assistant that automatically writes unit tests for your C code. You give it a C project, and it gives you back a test file that you can immediately compile and run.
+Welcome to Cirkitly! This is an AI assistant that collaborates with you to write robust unit tests for your C code. Instead of just generating code, Cirkitly first proposes a detailed test plan for your approval, ensuring you are always in control.
 
-### What It Does (The Magic)
+![Cirkitly Demo](assets/demo.gif)
 
-1.  **Reads Your Project:** Cirkitly scans your project folder to find all your `.c` and `.h` files.
-2.  **Asks You What to Test:** It shows you a list of your source files and asks you which one you want to create tests for.
-3.  **Thinks Like an Engineer:** It sends your code to a powerful AI (Large Language Model) and tells it to think like an expert C programmer.
-4.  **Writes the Test Code:** The AI writes a complete `test_*.c` file, including tests for normal cases (like good inputs) and edge cases (like `NULL` pointers or invalid values).
-5.  **Creates a Build File:** It also generates a `Makefile.test` so you don't have to figure out how to compile the new test.
+### The New Workflow (The Magic)
+
+Cirkitly acts as your partner, following a professional test development process:
+
+1.  **Scans Your Project:** It finds all your `.c` and `.h` source files.
+2.  **Proposes a Test Plan:** After you select a file, the AI analyzes the source code and any relevant specifications. It then presents you with a detailed, human-readable test plan, outlining every test case it intends to write.
+3.  **Gets Your Approval:** You review the plan. If it's correct and complete, you give the green light. This ensures the AI builds exactly what you want.
+4.  **Writes the Test Code:** The AI now writes a complete `test_*.c` file that precisely implements the approved plan, covering success paths, error handling, and edge cases.
+5.  **Creates a Build File:** It also generates a `Makefile.test` so you can immediately compile and run your new tests.
 
 ---
 
-### Requirements (What You Need Before You Start)
+### Requirements
 
 1.  **Python:** You'll need Python 3.10 or newer.
-2.  **Ollama (The AI Brain):** This project uses a free, open-source tool called **Ollama** to run the AI models on your own computer.
-    *   **What it is:** Ollama lets you download and use powerful AIs without needing an account or paying for an API.
-    *   **How to get it:** Download it from the official website: [https://ollama.com/](https://ollama.com/)
+2.  **A C Compiler:** A `gcc` compatible compiler is needed to run the generated tests.
+3.  **An AI Backend:** You need access to an AI model, either locally via Ollama or through the cloud via Azure OpenAI.
 
 ---
 
-### Step-by-Step Installation Guide
+### Step-by-Step Installation & Configuration
 
 #### Step 1: Get the Cirkitly Code
-
-First, you need to download the Cirkitly project files.
 
 ```bash
 # Clone the repository from GitHub
@@ -35,9 +36,48 @@ git clone https://github.com/Cirkitly/x-hardware-design
 cd x-hardware-design
 ```
 
-#### Step 2: Set Up the AI Brain (Ollama)
+#### Step 2: Install Python Packages
 
-Before you can run Cirkitly, you need to download the two AI models it uses. Make sure Ollama is running, then open your terminal and run these two commands.
+```bash
+# Install all required Python packages
+pip install -r requirements.txt
+```
+
+#### Step 3: Configure the AI Backend
+
+Cirkitly needs API keys and endpoint information to communicate with an AI. This is stored in a `.env` file. First, copy the example file:
+
+```bash
+cp .env.example .env
+```
+
+Now, open the new `.env` file and fill it out according to **one** of the options below.
+
+---
+
+##### **Option A: Azure OpenAI (Recommended for Speed & Power)**
+
+Edit your `.env` file to look like this, replacing the placeholder values with your actual Azure credentials.
+
+```dotenv
+# .env file for Azure
+
+AZURE_OPENAI_ENDPOINT=https://<your-resource-name>.openai.azure.com/
+AZURE_OPENAI_API_KEY=<your-azure-openai-key>
+AZURE_OPENAI_DEPLOYMENT=<your-deployment-name>
+AZURE_OPENAI_API_VERSION=2024-05-01-preview
+
+# The DEPLOYMENT name is not the model name (e.g., gpt-4), 
+# but the custom name you gave the model when you deployed it in Azure.
+
+LOG_DIR=logs
+```
+
+---
+
+##### **Option B: Ollama (Free, Private, and Local)**
+
+If you prefer to run models locally, first download and run [Ollama](https://ollama.com/). Then, pull the required models:
 
 ```bash
 # 1. Download the main language model (for writing code)
@@ -46,16 +86,8 @@ ollama pull llama3
 # 2. Download the embedding model (for understanding text)
 ollama pull mxbai-embed-large
 ```
-> **Note:** This might take a few minutes and will download a few gigabytes of data, but you only have to do this once!
 
-#### Step 3: Install the Python Packages
-
-Cirkitly depends on a few Python libraries. The `requirements.txt` file lists them all.
-
-```bash
-# Install all required Python packages
-pip install -r requirements.txt
-```
+The default `.env.example` is already set up for Ollama, so you don't need to make any changes to your `.env` file.
 
 ---
 
@@ -63,20 +95,19 @@ pip install -r requirements.txt
 
 #### Step 1: Prepare Your C Project
 
-Cirkitly needs a C project to test. You can use your own, or start with the example we provide. The structure should look like this:
+Cirkitly works with standard C project layouts. The included `my_c_project` is a great starting point.
 
 ```
 my_c_project/
 ├── include/
-│   └── spi.h       <-- Your header files go here
+│   └── spi.h       <-- Your header files
 └── src/
-    └── spi.c       <-- Your source code files go here
+    └── spi.c       <-- Your source code
 ```
-> The repository already includes this `my_c_project` folder for you to try!
 
 #### Step 2: Run Cirkitly
 
-Make sure you are in the main `cirkitly` directory, then run the program.
+From the main `cirkitly` directory, run the program:
 
 ```bash
 python main.py
@@ -84,36 +115,41 @@ python main.py
 
 #### Step 3: Follow the Prompts
 
-The program will ask you a couple of questions:
-
-1.  `Enter the path to the repository:`
-    *   Type: `my_c_project` and press Enter.
+1.  `Enter the path to the C project:`
+    *   Press Enter to accept the default (`my_c_project`).
 
 2.  `Which file would you like to generate tests for?`
-    *   It will show you a numbered list. Type the number for `spi.c` (e.g., `1`) and press Enter.
+    *   It will show you a numbered list. Type the number for `spi.c` and press Enter.
 
-#### Step 4: See the Results!
+#### Step 4: Approve the Test Plan
 
-Cirkitly will think for a moment and then tell you it's done.
+Cirkitly will now present you with a detailed Markdown plan. Review the proposed test cases. If you're happy with the plan, approve it to proceed.
+
+```text
+Does this test plan look correct? Shall I proceed with generating the code? [y/n] (y): y
+```
+
+#### Step 5: Get the Results!
+
+The AI will generate the code and tell you when it's done.
 
 ```
-====================
-Test Generation Complete!
-Tests written to my_c_project/src/test_spi.c
-Makefile generated at my_c_project/Makefile.test
-====================
+==================================================
+Cirkitly Task Complete!
+  - Tests written to my_c_project/src/test_spi.c
+  - Makefile generated at my_c_project/Makefile.test
+==================================================
 ```
-You now have two new files in your `my_c_project` folder!
 
 ---
 
 ### How to Run Your New Tests
 
-You've generated the tests, now let's run them to check your C code!
+You've generated the tests, now let's run them!
 
-#### Step 1: Get the Unity Testing Tool
+#### Step 1: Get the Unity Testing Framework
 
-The generated tests use a popular C testing tool called **Unity**. You need to download it into your C project folder.
+The generated tests use **Unity**, a popular C testing framework. You only need to do this once per C project.
 
 ```bash
 # Navigate into your C project
@@ -125,25 +161,27 @@ git clone https://github.com/ThrowTheSwitch/Unity.git unity
 
 #### Step 2: Compile and Run!
 
-The `Makefile.test` that Cirkitly created does all the hard work. Just run this command:
+The `Makefile.test` that Cirkitly created does all the hard work.
 
 ```bash
 make -f Makefile.test run
 ```
 
-You should see the tests compile and then run, ending with a message like this:
+You should see the tests compile and run, ending with a message like this:
 
 ```
 -----------------------
-3 Tests 0 Failures 0 Ignored
+17 Tests 0 Failures 0 Ignored
 OK
 ```
-**Congratulations! You've successfully used AI to write and run tests for your C code!**
+
+**Congratulations! You've successfully used an AI copilot to write and run tests for your C code!**
 
 ---
 
 ### Troubleshooting
 
-*   **Error: `Ollama connection error`**: Make sure the Ollama application is running on your computer.
-*   **Error: `File not found`**: Make sure you typed the correct path to your project folder (e.g., `my_c_project`).
-*   **C compilation error (`make: *** ... Error 1`)**: Sometimes the AI makes a small mistake. Open the generated `test_*.c` file. The C compiler error message will usually tell you exactly which line to fix. This is a normal part of working with AI assistants (this will be solved in the upcoming version of this project).
+*   **API / Network Errors (Azure):** If the program hangs or shows a timeout error, double-check your `.env` file for typos in the endpoint and API key. Also, ensure your network firewall allows outbound connections to `*.openai.azure.com`.
+*   **Connection Errors (Ollama):** Make sure the Ollama application is running on your computer before starting Cirkitly.
+*   **`File not found`:** Make sure you typed the correct path to your project folder (e.g., `my_c_project`).
+*   **C Compilation Errors:** While the new workflow makes this much less likely, the AI can still occasionally make a small mistake. If `make` fails, the C compiler error message will usually point to the exact line in `test_spi.c` that needs a minor fix.
