@@ -1,129 +1,152 @@
 import pytest
-from nodes import GetQuestionNode, EmbeddingNode, RetrievalNode, AnswerNode
+from unittest.mock import MagicMock, mock_open, patch
+from pocketflow import Flow
+from nodes import (
+    ProjectParserNode,
+    CandidateSelectionNode,  # Corrected name
+    PlanGeneratorNode,       # Corrected name
+    HumanApprovalNode,
+    ContextualTestGeneratorNode,
+    FileWriterNode,
+)
 
-# --- Mocks for external dependencies ---
-# We mock the heavyweight 'get_embedding' and 'KNOWLEDGE_EMBEDDINGS' at the module level
-# because their initialization is slow. We can override these mocks in specific tests if needed.
-@pytest.fixture(autouse=True)
-def mock_node_dependencies(mocker):
-    """Auto-mock dependencies for all tests in this file."""
-    # Mock the embedding function to return a predictable vector
-    mocker.patch("nodes.get_embedding", return_value=[0.1] * 1024)
-    # Mock the pre-calculated knowledge embeddings
-    mocker.patch("nodes.KNOWLEDGE_EMBEDDINGS", [[0.1] * 1024])
-    # Mock the LLM call to return a simple response
-    mocker.patch("nodes.call_llm", return_value="This is a test answer.")
+# A reusable fixture that provides a mock project structure for multiple tests.
+@pytest.fixture
+def mock_shared_state():
+    return {
+        "project_structure": {
+            "sources": {
+                "spi.c": {
+                    "path": "my_c_project/src/spi.c",
+                    "content": "int spi_init() { return 0; }",
+                    "dependencies": ["spi.h"]
+                },
+                "i2c.c": {
+                    "path": "my_c_project/src/i2c.c",
+                    "content": "int i2c_init() { return 0; }",
+                    "dependencies": ["i2c.h"]
+                }
+            },
+            "headers": {
+                "spi.h": {"path": "my_c_project/include/spi.h", "content": "#define SPI_OK 0"},
+                "i2c.h": {"path": "my_c_project/include/i2c.h", "content": "#define I2C_OK 0"}
+            },
+            "specs": {}
+        },
+        "repo_path": "my_c_project"
+    }
 
-
-# --- Test GetQuestionNode ---
-def test_get_question_node_exec(mocker):
-    """Test GetQuestionNode's exec method captures input."""
-    # Arrange
-    mocker.patch('builtins.input', return_value="What is Cirkitly?")
-    node = GetQuestionNode()
+# --- Test ProjectParserNode ---
+@patch("nodes.glob")
+@patch("nodes.os.path.isdir", return_value=True)
+@patch("nodes.prompt_for_input", return_value="my_c_project")
+def test_project_parser_node(mock_prompt, mock_isdir, mock_glob):
+    """Verify the project parser correctly finds and reads files."""
+    node = ProjectParserNode()
+    mock_glob.glob.side_effect = [
+        ["my_c_project/src/spi.c"],
+        ["my_c_project/include/spi.h"],
+        [],
+        []
+    ]
+    m = mock_open(read_data='// Mocked file content\n#include "spi.h"')
     
-    # Act
-    result = node.exec(None)
+    with patch("builtins.open", m):
+        result = node.exec(None)
+
+    assert "spi.c" in result["sources"]
+    assert "spi.h" in result["headers"]
+    assert result["sources"]["spi.c"]["dependencies"] == ["spi.h"]
+
+
+# --- Test CandidateSelectionNode ---
+def test_candidate_selection_node(mocker, mock_shared_state):
+    """Verify the user's choice is correctly identified."""
+    node = CandidateSelectionNode() # Corrected name
+    mocker.patch("nodes.prompt_for_choice", return_value=2)
     
-    # Assert
-    assert result == "What is Cirkitly?"
-
-def test_get_question_node_post():
-    """Test GetQuestionNode's post method updates shared state."""
-    # Arrange
-    node = GetQuestionNode()
-    shared = {}
+    selected_file = node.exec(mock_shared_state["project_structure"])
     
-    # Act
-    node.post(shared, None, "Test Question")
+    assert selected_file["path"] == "my_c_project/src/i2c.c"
+
+
+# --- Test PlanGeneratorNode ---
+def test_plan_generator_node(mocker):
+    """Verify the plan generator calls the LLM with the correct prompt."""
+    node = PlanGeneratorNode() # Corrected name
+    mock_llm = mocker.patch("nodes.call_llm", return_value="This is a test plan.")
+    inputs = {
+        "target_content": "int main() {}",
+        "target_filename": "main.c",
+        "requirements": "Must work."
+    }
     
-    # Assert
-    assert shared["question"] == "Test Question"
-
-
-# --- Test EmbeddingNode ---
-def test_embedding_node_prep():
-    """Test EmbeddingNode's prep method reads from shared state."""
-    # Arrange
-    node = EmbeddingNode()
-    shared = {"question": "Test Question"}
-    
-    # Act
-    result = node.prep(shared)
-    
-    # Assert
-    assert result == "Test Question"
-
-def test_embedding_node_exec(mocker):
-    """Test EmbeddingNode's exec method calls get_embedding."""
-    # Arrange
-    mock_get_embedding = mocker.patch("nodes.get_embedding")
-    node = EmbeddingNode()
-    
-    # Act
-    node.exec("Test Question")
-    
-    # Assert
-    mock_get_embedding.assert_called_once_with("Test Question")
-
-def test_embedding_node_post():
-    """Test EmbeddingNode's post method updates shared state."""
-    # Arrange
-    node = EmbeddingNode()
-    shared = {}
-    embedding_vector = [0.1, 0.2, 0.3]
-    
-    # Act
-    node.post(shared, None, embedding_vector)
-    
-    # Assert
-    assert shared["question_embedding"] == embedding_vector
-
-
-# --- Test RetrievalNode ---
-def test_retrieval_node_exec(mocker):
-    """Test RetrievalNode's exec method finds the most similar doc."""
-    # Arrange
-    # This test relies on the auto-mocked KNOWLEDGE_EMBEDDINGS.
-    # We can also mock cosine_similarity to force a specific outcome.
-    mocker.patch("nodes.cosine_similarity", return_value=[[0.9, 0.1, 0.5]])
-    mocker.patch("nodes.KNOWLEDGE_DOCS", ["Doc A", "Doc B", "Doc C"])
-    node = RetrievalNode()
-    
-    # Act
-    result = node.exec([0.1] * 1024) # Input embedding doesn't matter due to mock
-    
-    # Assert
-    assert result == "Doc A" # Because we mocked similarities to make the first one highest
-
-
-# --- Test AnswerNode ---
-def test_answer_node_prep():
-    """Test AnswerNode's prep method gathers context and question."""
-    # Arrange
-    node = AnswerNode()
-    shared = {"question": "Q1", "retrieved_context": "C1"}
-
-    # Act
-    result = node.prep(shared)
-
-    # Assert
-    assert result == {"question": "Q1", "context": "C1"}
-
-
-def test_answer_node_exec(mocker):
-    """Test AnswerNode's exec method constructs the correct prompt."""
-    # Arrange
-    mock_call_llm = mocker.patch("nodes.call_llm")
-    node = AnswerNode()
-    inputs = {"question": "The Question", "context": "The Context"}
-    
-    # Act
     node.exec(inputs)
+    
+    mock_llm.assert_called_once()
+    prompt_arg = mock_llm.call_args[0][0]
+    assert "int main() {}" in prompt_arg
+    assert "main.c" in prompt_arg
+    assert "Must work." in prompt_arg
 
-    # Assert
-    # Check that call_llm was called once with a prompt containing our inputs
-    mock_call_llm.assert_called_once()
-    prompt_arg = mock_call_llm.call_args[0][0]
-    assert "The Question" in prompt_arg
-    assert "The Context" in prompt_arg
+
+# --- Test HumanApprovalNode ---
+def test_human_approval_node_approves(mocker):
+    """Verify flow continues when user approves."""
+    node = HumanApprovalNode()
+    node.flow_control = MagicMock()
+    node.flow_control.stop_flow = False
+    
+    mocker.patch("nodes.prompt_for_confirmation", return_value=True)
+    
+    node.exec("Test plan")
+    
+    assert node.flow_control.stop_flow is False
+
+def test_human_approval_node_rejects(mocker):
+    """Verify flow stops when user rejects."""
+    node = HumanApprovalNode()
+    node.flow_control = MagicMock()
+    node.flow_control.stop_flow = False
+    
+    mocker.patch("nodes.prompt_for_confirmation", return_value=False)
+
+    node.exec("Test plan")
+    
+    assert node.flow_control.stop_flow is True
+
+
+# --- Test FileWriterNode ---
+def test_file_writer_node_writes_new_file(mocker):
+    """Verify a new file is written correctly."""
+    node = FileWriterNode()
+    node.flow_control = MagicMock()
+    
+    mocker.patch("os.path.exists", return_value=False)
+    mocked_open = mock_open()
+    mocker.patch("builtins.open", mocked_open)
+
+    inputs = {"filename": "test.c", "content": "```c\nint main() {}\n```"}
+    
+    result = node.exec(inputs)
+    
+    mocked_open.assert_called_once_with("test.c", 'w', encoding='utf-8')
+    handle = mocked_open()
+    handle.write.assert_called_once_with("int main() {}")
+    assert "Tests written to" in result
+
+def test_file_writer_node_stops_on_overwrite_rejection(mocker):
+    """Verify flow stops if user rejects overwriting an existing file."""
+    node = FileWriterNode()
+    node.flow_control = MagicMock()
+    node.flow_control.stop_flow = False
+    
+    mocker.patch("os.path.exists", return_value=True)
+    mocker.patch("nodes.prompt_for_confirmation", return_value=False)
+    
+    node.prep({
+        "target_file": {"path": "my_c_project/src/spi.c"},
+        "generated_tests": "some code"
+    })
+    
+    assert node.flow_control.stop_flow is True
