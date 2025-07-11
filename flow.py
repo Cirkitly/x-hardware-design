@@ -4,24 +4,27 @@ from pocketflow import Flow
 from nodes import (
     ProjectParserNode, 
     TestCandidateSelectionNode, 
+    RequirementExtractionNode,
     ContextualTestGeneratorNode, 
-    TestRefinementNode,  # <-- Import the new node
+    FinalReviewerNode, # New
+    HumanReviewNode,   # New
     FileWriterNode,
     MakefileGeneratorNode
 )
 
 def create_repo_testgen_flow():
-    """Creates a flow for generating and refining tests for a file within a repo."""
-    # Create nodes
     parser_node = ProjectParserNode()
     selector_node = TestCandidateSelectionNode()
+    extractor_node = RequirementExtractionNode()
     generator_node = ContextualTestGeneratorNode()
-    refiner_node = TestRefinementNode()  # <-- Instantiate the new node
+    reviewer_node = FinalReviewerNode()
+    human_node = HumanReviewNode()
     writer_node = FileWriterNode()
     makefile_node = MakefileGeneratorNode()
 
-    # Connect the full pipeline with the new refinement step
-    parser_node >> selector_node >> generator_node >> refiner_node >> writer_node >> makefile_node
+    # The new, more robust flow
+    (parser_node >> selector_node >> extractor_node >> generator_node >> 
+     reviewer_node >> human_node >> writer_node >> makefile_node)
     
     return Flow(start=parser_node)
 
