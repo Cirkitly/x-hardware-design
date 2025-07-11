@@ -8,7 +8,7 @@ from utils.call_llm import call_llm
 from utils.get_embedding import get_embedding
 from sklearn.metrics.pairwise import cosine_similarity
 import numpy as np
-from tui import console, print_step, prompt_for_input, prompt_for_choice, status
+from tui import console, print_step, prompt_for_input, prompt_for_choice, status, prompt_for_confirmation
 
 def print_code(code):
     """Prints code in a formatted way to the console."""
@@ -129,6 +129,7 @@ class ContextualTestGeneratorNode(Node):
     def exec(self, inputs):
         with status("Generating initial draft of tests..."):
             target_filename = os.path.basename(inputs["target"]["path"])
+            # --- FIX: os.path.splitext returns a tuple ('name', '.ext'). Get the first part [0]. ---
             target_header = os.path.splitext(target_filename)[0] + ".h"
             prompt = f"""
             You are an expert C unit testing engineer. Generate a comprehensive test suite for the function(s) in `{target_filename}` based on the provided specification and source code.
@@ -187,6 +188,7 @@ class HumanReviewNode(Node):
 
     def exec(self, generated_code):
         if "```c" in generated_code:
+            # --- FIX: .split() returns a list. Select the code [0] before calling .strip() ---
             code_to_show = generated_code.split("```c")[1].split("```")[0].strip()
         else:
             code_to_show = generated_code.strip()
@@ -228,6 +230,7 @@ class FileWriterNode(Node):
         if "```c" in content:
             parts = content.split("```c")
             if len(parts) > 1:
+                # --- FIX: .split() returns a list. Select the code [0]. ---
                 content = parts[1].split("```")[0]
         
         content = content.strip()
@@ -242,6 +245,7 @@ class FileWriterNode(Node):
 
 class MakefileGeneratorNode(Node):
     def prep(self, shared):
+        # --- FIX: .split() returns a list. Select the path [0]. ---
         test_file_path = shared["output_status"].split("[path]")[1].split("[/path]")[0]
         
         return {
