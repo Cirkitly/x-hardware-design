@@ -1,10 +1,15 @@
-// File: my_c_project/src/spi.c
-
 #include "spi.h"
 #include <stdbool.h>
 
+#ifdef TEST
+spi_state_t g_spi_state = SPI_STATE_UNINITIALIZED;
+spi_config_t g_spi_config;
+#else
 static spi_state_t g_spi_state = SPI_STATE_UNINITIALIZED;
 static spi_config_t g_spi_config;
+#endif
+// --- END OF FIX ---
+
 
 static bool is_valid_speed(uint32_t speed) {
     return (speed == 1000000 || speed == 4000000 || speed == 8000000);
