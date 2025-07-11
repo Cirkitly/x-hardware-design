@@ -8,7 +8,7 @@ from utils.call_llm import call_llm
 from utils.get_embedding import get_embedding
 from sklearn.metrics.pairwise import cosine_similarity
 import numpy as np
-from tui import console, print_step, prompt_for_input, prompt_for_choice, status, prompt_for_confirmation
+from tui import console, print_step, prompt_for_input, prompt_for_choice, status, prompt_for_confirmation, print_plan
 
 def print_code(code):
     """Prints code in a formatted way to the console."""
@@ -122,37 +122,98 @@ class RequirementExtractionNode(Node):
     def post(self, shared, prep_res, exec_res):
         shared["relevant_requirements"] = exec_res
 
+class TestPlanGeneratorNode(Node):
+    def prep(self, shared):
+        return {
+            "target_content": shared["target_file"]["content"],
+            "target_filename": os.path.basename(shared["target_file"]["path"]),
+            "requirements": shared.get("relevant_requirements", "No specific requirements provided.")
+        }
+
+    def exec(self, inputs):
+        with status("Generating a test plan for your review..."):
+            prompt = f"""
+            You are a senior C software test engineer. Your task is to create a test plan for the C source file `{inputs['target_filename']}`.
+
+            Analyze the provided source code and functional requirements, then create a clear, concise test plan in Markdown format.
+            For each function in the source file, list the specific test cases you will create. Each test case should be a bullet point describing its purpose (e.g., testing success, error handling, edge cases).
+
+            ### Functional Requirements ###
+            {inputs['requirements']}
+
+            ### Source Code to Plan For ###
+            ```c
+            {inputs['target_content']}
+            ```
+
+            Return ONLY the Markdown test plan. Do not write any C code yet.
+            """
+            response = call_llm(prompt, use_cache=False)
+        print_step("Test plan generated.")
+        return response
+
+    def post(self, shared, prep_res, exec_res):
+        shared["test_plan"] = exec_res
+
+class HumanApprovalNode(Node):
+    def prep(self, shared):
+        return shared["test_plan"]
+
+    def exec(self, test_plan):
+        console.print()
+        print_plan(test_plan)
+        console.print()
+
+        if not prompt_for_confirmation("Does this test plan look correct? Shall I proceed with generating the code?"):
+            print_step("Aborting based on user input. No code will be generated.")
+            self.flow_control.stop_flow = True # Stops the flow
+        
+        return test_plan # Pass the approved plan through
+    
+    def post(self, shared, prep_res, exec_res):
+        pass
+
 class ContextualTestGeneratorNode(Node):
     def prep(self, shared):
-        return {"target": shared["target_file"], "headers": shared["project_structure"]["headers"], "requirements": shared.get("relevant_requirements", "No specific requirements provided.")}
+        return {
+            "target_content": shared["target_file"]["content"],
+            "target_filename": os.path.basename(shared["target_file"]["path"]),
+            "approved_plan": shared["test_plan"]
+        }
     
     def exec(self, inputs):
-        with status("Generating initial draft of tests..."):
-            target_filename = os.path.basename(inputs["target"]["path"])
-            # --- FIX: os.path.splitext returns a tuple ('name', '.ext'). Get the first part [0]. ---
-            target_header = os.path.splitext(target_filename)[0] + ".h"
+        console.print("\n[info]This next step involves a large request to the AI and may take a few minutes. Please be patient...[/info]")
+        with status("Generating test code based on the approved plan..."):
             prompt = f"""
-            You are an expert C unit testing engineer. Generate a comprehensive test suite for the function(s) in `{target_filename}` based on the provided specification and source code.
+            You are an expert C unit testing engineer. Your task is to write a complete C test file that implements the following approved test plan for the source code in `{inputs['target_filename']}`.
 
-            ### Functional Requirements from Specification ###
-            {inputs["requirements"]}
+            **Implement this EXACT test plan:**
+            {inputs['approved_plan']}
 
-            ### Source Code to Test ###
+            **Base the tests on this source code:**
             ```c
-            {inputs["target"]["content"]}
+            {inputs['target_content']}
             ```
             
-            **Task:** Write a complete C file containing Unity tests. The tests should be thorough and cover all requirements.
+            **CRITICAL INSTRUCTIONS:**
+            1.  Write a complete C file containing Unity tests. The code must be complete and syntactically correct.
+            2.  Include the necessary headers: `#include "unity.h"`, `#include "spi.h"`.
+            3.  **To access the internal state for testing, you MUST declare the global variables from `spi.c` as `extern`. Add these lines at the top of the test file:**
+                ```c
+                extern spi_state_t g_spi_state;
+                extern spi_config_t g_spi_config;
+                ```
+            4.  Implement the `setUp()` function to reset the state before each test.
             """
-            response = call_llm(prompt)
+            response = call_llm(prompt, max_tokens=4096)
         print_step("Initial draft generated.")
         return response
 
     def post(self, shared, prep_res, exec_res):
         shared["generated_tests"] = exec_res
 
+
 class FinalReviewerNode(Node):
-    """A final pass to fix C syntax and structural errors."""
     def prep(self, shared):
         return {"generated_code": shared["generated_tests"]}
 
@@ -167,42 +228,18 @@ class FinalReviewerNode(Node):
             ```
 
             **Fix these common errors:**
-            1.  **Function Signatures:** Ensure all test function names are valid C identifiers. They must not contain spaces. Example: `void my test()` is WRONG. `void my_test()` is CORRECT.
+            1.  **Completeness:** Ensure no functions are left unfinished. Check for hanging curly braces or incomplete statements.
             2.  **Includes:** Ensure necessary headers like `unity.h`, `spi.h`, `<stdlib.h>` are included.
-            3.  **Mandatory Functions:** Ensure `setUp(void)` and `tearDown(void)` exist, even if empty.
-            4.  **RUN_TEST calls:** Ensure the arguments to `RUN_TEST()` are valid function names that exist in the file.
+            3.  **Global Variable Access:** Ensure the test file declares `extern spi_state_t g_spi_state;` and `extern spi_config_t g_spi_config;` at the top level to access the module's internal state.
+            4.  **Struct Initializers:** Ensure all `spi_config_t` structs are initialized using designated initializers, like `spi_config_t my_config = {{.mode = 0, .speed_hz = 1000000}};`. This prevents overflow warnings.
+            5.  **Mandatory Functions:** Ensure `setUp(void)`, `tearDown(void)`, and a `main` function with `RUN_TEST` calls exist.
 
             Return ONLY the complete, corrected C code in a single markdown block.
             """
-            response = call_llm(review_prompt, use_cache=False)
+            response = call_llm(review_prompt, use_cache=False, max_tokens=4096)
         print_step("Final review complete.")
         return response
 
-    def post(self, shared, prep_res, exec_res):
-        shared["generated_tests"] = exec_res
-
-class HumanReviewNode(Node):
-    """Shows the final code to the user and asks for approval before writing."""
-    def prep(self, shared):
-        return shared["generated_tests"]
-
-    def exec(self, generated_code):
-        if "```c" in generated_code:
-            # --- FIX: .split() returns a list. Select the code [0] before calling .strip() ---
-            code_to_show = generated_code.split("```c")[1].split("```")[0].strip()
-        else:
-            code_to_show = generated_code.strip()
-
-        console.print()
-        print_code(code_to_show)
-        console.print()
-
-        if not prompt_for_confirmation("Save this generated test file?"):
-            print_step("Aborting. No files were written.")
-            self.flow_control.stop_flow = True # Stops the flow from proceeding
-        
-        return generated_code # Pass the code through
-    
     def post(self, shared, prep_res, exec_res):
         shared["generated_tests"] = exec_res
 
@@ -215,7 +252,6 @@ class FileWriterNode(Node):
         base, ext = os.path.splitext(base_name)
         test_filename = os.path.join(dir_name, f"test_{base}.c")
         
-        # Add overwrite guard
         if os.path.exists(test_filename):
             if not prompt_for_confirmation(f"[warning]File [path]{test_filename}[/path] already exists. Overwrite?[/warning]", default=False):
                 print_step("Aborting. No files were written.")
@@ -230,7 +266,6 @@ class FileWriterNode(Node):
         if "```c" in content:
             parts = content.split("```c")
             if len(parts) > 1:
-                # --- FIX: .split() returns a list. Select the code [0]. ---
                 content = parts[1].split("```")[0]
         
         content = content.strip()
@@ -245,7 +280,6 @@ class FileWriterNode(Node):
 
 class MakefileGeneratorNode(Node):
     def prep(self, shared):
-        # --- FIX: .split() returns a list. Select the path [0]. ---
         test_file_path = shared["output_status"].split("[path]")[1].split("[/path]")[0]
         
         return {

@@ -23,7 +23,7 @@ if not logger.handlers:
 # Cache file path
 cache_file = "llm_cache.json"
 
-def call_llm(prompt: str, use_cache: bool = True) -> str:
+def call_llm(prompt: str, use_cache: bool = True, max_tokens: int = 4096) -> str:
     logger.info(f"PROMPT: {prompt}")
     cache = {}
 
@@ -54,7 +54,10 @@ def call_llm(prompt: str, use_cache: bool = True) -> str:
         response = client.chat.completions.create(
             model=deployment,
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=1000,
+            max_tokens=max_tokens,
+            # --- START OF FIX: Add a reasonable timeout to prevent hanging ---
+            timeout=30.0 
+            # --- END OF FIX ---
         )
 
         response_text = response.choices[0].message.content.strip()
