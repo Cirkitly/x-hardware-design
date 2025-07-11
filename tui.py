@@ -1,11 +1,10 @@
-# File: cirkitly/tui.py
-
 from rich.console import Console
 from rich.panel import Panel
 from rich.prompt import Prompt, IntPrompt, Confirm
 from rich.rule import Rule
 from rich.theme import Theme
 from rich.syntax import Syntax
+from rich.markdown import Markdown
 
 # Define a custom theme for consistent styling
 custom_theme = Theme({
@@ -38,6 +37,13 @@ def print_code(code: str, language: str = "c"):
     syntax = Syntax(code, language, theme="monokai", line_numbers=True)
     panel = Panel(syntax, title=f"[info]{language.capitalize()} Code Review[/info]", border_style="info")
     console.print(panel)
+
+def print_plan(plan_text: str):
+    """Prints a markdown-formatted plan in a panel."""
+    markdown = Markdown(plan_text)
+    panel = Panel(markdown, title="[info]Proposed Test Plan[/info]", border_style="info", expand=False, padding=(1,2))
+    console.print(panel)
+
 
 def prompt_for_input(prompt_text: str, default: str) -> str:
     """Prompts the user for text input."""
